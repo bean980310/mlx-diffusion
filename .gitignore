@@ -1,3 +1,6 @@
+.vscode
+._*
+.DS_Store
 *.safetensors
 *.ckpt
 *.bin
