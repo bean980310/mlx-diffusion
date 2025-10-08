@@ -1,5 +1,6 @@
 .vscode
 ._*
+.venv
 .DS_Store
 *.safetensors
 *.ckpt
