@@ -1,17 +1,24 @@
 # Copyright © 2023-2024 Apple Inc.
 
 import json
+import os
+import importlib
 from typing import Optional
+from pathlib import Path
 
 import mlx.core as mx
 from huggingface_hub import hf_hub_download
 from mlx.utils import tree_unflatten
+from diffusers.pipelines.stable_diffusion.convert_from_ckpt import (
+    download_from_original_stable_diffusion_ckpt,
+)
 
 from .clip import CLIPTextModel
 from .config import AutoencoderConfig, CLIPTextModelConfig, DiffusionConfig, UNetConfig
 from .tokenizer import Tokenizer
 from .unet import UNetModel
 from .vae import Autoencoder
+from ..utils.environment import get_cache_dir
 
 _DEFAULT_MODEL = "stabilityai/stable-diffusion-2-1-base"
 _MODELS = {
@@ -42,6 +49,43 @@ _MODELS = {
         "diffusion_config": "scheduler/scheduler_config.json",
         "tokenizer_vocab": "tokenizer/vocab.json",
         "tokenizer_merges": "tokenizer/merges.txt",
+    },
+    "runwayml/stable-diffusion-v1-5": {
+        "unet_config": "unet/config.json",
+        "unet": "unet/diffusion_pytorch_model.safetensors",
+        "text_encoder_config": "text_encoder/config.json",
+        "text_encoder": "text_encoder/model.safetensors",
+        "vae_config": "vae/config.json",
+        "vae": "vae/diffusion_pytorch_model.safetensors",
+        "diffusion_config": "scheduler/scheduler_config.json",
+        "tokenizer_vocab": "tokenizer/vocab.json",
+        "tokenizer_merges": "tokenizer/merges.txt",
+    },
+    "stabilityai/stable-diffusion-xl-base-1.0": {
+        "unet_config": "unet/config.json",
+        "unet": "unet/diffusion_pytorch_model.safetensors",
+        "text_encoder_config": "text_encoder/config.json",
+        "text_encoder": "text_encoder/model.safetensors",
+        "text_encoder_2_config": "text_encoder_2/config.json",
+        "text_encoder_2": "text_encoder_2/model.safetensors",
+        "vae_config": "vae/config.json",
+        "vae": "vae/diffusion_pytorch_model.safetensors",
+        "diffusion_config": "scheduler/scheduler_config.json",
+        "tokenizer_vocab": "tokenizer/vocab.json",
+        "tokenizer_merges": "tokenizer/merges.txt",
+        "tokenizer_2_vocab": "tokenizer_2/vocab.json",
+        "tokenizer_2_merges": "tokenizer_2/merges.txt",
+    },
+    "stabilityai/stable-diffusion-xl-refiner-1.0": {
+        "unet_config": "unet/config.json",
+        "unet": "unet/diffusion_pytorch_model.safetensors",
+        "text_encoder_2_config": "text_encoder_2/config.json",
+        "text_encoder_2": "text_encoder_2/model.safetensors",
+        "vae_config": "vae/config.json",
+        "vae": "vae/diffusion_pytorch_model.safetensors",
+        "diffusion_config": "scheduler/scheduler_config.json",
+        "tokenizer_2_vocab": "tokenizer_2/vocab.json",
+        "tokenizer_2_merges": "tokenizer_2/merges.txt",
     },
 }
 
@@ -328,3 +372,38 @@ def load_tokenizer(
     bpe_ranks = dict(map(reversed, enumerate(bpe_merges)))
 
     return Tokenizer(bpe_ranks, vocab)
+
+def cache_model_from_single_file(
+    file_path: Path, pipeline_class_name: Optional[str] = None
+) -> Path:
+    cache_dir = os.path.join(get_cache_dir(), 'models')
+    filename = os.path.basename(file_path)
+    path, ext = os.path.splitext(os.path.basename(filename))
+    cache_path = os.path.join(cache_dir, path)
+
+    if not os.path.exists(cache_path):
+        from_safetensors = False
+        os.makedirs(cache_path, exist_ok=True)
+        print(
+            f"Directory {cache_path} created, proceeding to unpack the model."
+        )
+
+        if pipeline_class_name is not None:
+            library = importlib.import_module("diffusers")
+            class_obj = getattr(library, pipeline_class_name)
+            pipeline_class = class_obj
+        else:
+            pipeline_class = None
+
+        if ext == ".safetensors":
+            from_safetensors = True
+
+        pipe = download_from_original_stable_diffusion_ckpt(
+            checkpoint_path=file_path,
+            from_safetensors=from_safetensors,
+            pipeline_class=pipeline_class,
+            load_safety_checker=False,
+        )
+        pipe.save_pretrained(cache_path, safe_serialization=True)
+
+    return Path(cache_path)
