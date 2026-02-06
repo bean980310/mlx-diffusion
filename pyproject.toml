@@ -9,8 +9,7 @@ requires=[
 
 [project]
 name = "mlx-image-diffusion"
-dynamic=["dependencies"]
-version = "0.0.1"
+dynamic=["dependencies", "version"]
 authors=[
     {name="Hyunbeen Chang", email="bean980310@gmail.com"}
 ]
@@ -23,3 +22,4 @@ requires-python = ">=3.10, <3.14"
 
 [tool.setuptools.dynamic]
 dependencies = {file=["requirements.txt"]}
+version={attr="mlx_image.__init__.__version__"}
