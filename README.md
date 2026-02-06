@@ -10,6 +10,17 @@
 - optional LoRA merge on torch components
 - PyTorch checkpoint -> MLX-friendly `.safetensors` conversion
 
+지원 family:
+- `stable_diffusion`
+- `stable_diffusion_xl`
+- `stable_diffusion_3`
+- `flux`
+- `flux2`
+- `z_image`
+- `z_image_turbo`
+- `qwen_image`
+- `qwen_image_edit`
+
 ### Python Example
 
 ```python
@@ -31,6 +42,7 @@ converted = convert_components_from_pretrained(
     model_id_or_path="runwayml/stable-diffusion-v1-5",
     components=["unet", "vae", "text_encoder"],
     output_dir="./mlx_weights/sd15",
+    family="stable_diffusion",
     mapping="auto",
     dtype="float16",
     # lora_path="./my_lora",
@@ -52,6 +64,7 @@ mlx_bundle = load_mlx_components(
 ```bash
 python -m mlx_image.convert_weights \
   --model runwayml/stable-diffusion-v1-5 \
+  --family stable_diffusion \
   --components unet vae text_encoder \
   --outdir ./mlx_weights/sd15 \
   --mapping auto \

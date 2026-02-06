@@ -33,6 +33,25 @@ ComponentType = Literal[
     "t5",
 ]
 
+ModelFamilyType = Literal[
+    "stable_diffusion",
+    "stable_diffusion_xl",
+    "stable_diffusion_3",
+    "flux",
+    "flux2",
+    "z_image",
+    "z_image_turbo",
+    "qwen_image",
+    "qwen_image_edit",
+    "stable-diffusion",
+    "stable-diffusion-xl",
+    "stable-diffusion-3",
+    "z-image",
+    "z-image-turbo",
+    "qwen-image",
+    "qwen-image-edit",
+]
+
 MappingType = Literal[
     "auto",
     "generic",
@@ -45,7 +64,7 @@ MappingType = Literal[
     "flux_t5",
 ]
 
-MLXFamilyType = Literal["stable-diffusion", "flux"]
+MLXFamilyType = ModelFamilyType
 DiffusionModelType = Literal["unet", "transformer"]
 
 _FLOAT_DTYPES = {"float16": torch.float16, "float32": torch.float32}
@@ -72,6 +91,53 @@ _FLUX_T5_ENCODER_REPLACEMENTS = [
     (".layer.0.SelfAttention.", ".attention."),
     (".layer.1.DenseReluDense.", ".dense."),
 ]
+
+_FAMILY_ALIASES = {
+    "stable_diffusion": "stable-diffusion",
+    "stable_diffusion_xl": "stable-diffusion-xl",
+    "stable_diffusion_3": "stable-diffusion-3",
+    "flux": "flux",
+    "flux2": "flux2",
+    "z_image": "z-image",
+    "z_image_turbo": "z-image-turbo",
+    "qwen_image": "qwen-image",
+    "qwen_image_edit": "qwen-image-edit",
+    "stable-diffusion": "stable-diffusion",
+    "stable-diffusion-xl": "stable-diffusion-xl",
+    "stable-diffusion-3": "stable-diffusion-3",
+    "z-image": "z-image",
+    "z-image-turbo": "z-image-turbo",
+    "qwen-image": "qwen-image",
+    "qwen-image-edit": "qwen-image-edit",
+}
+
+
+def resolve_model_family(family: Optional[str]) -> str:
+    if family is None:
+        return "stable-diffusion"
+    key = family.strip().lower()
+    if key not in _FAMILY_ALIASES:
+        raise ValueError(
+            f"Unsupported model family: {family!r}. "
+            f"Supported values: {sorted(_FAMILY_ALIASES.keys())}"
+        )
+    return _FAMILY_ALIASES[key]
+
+
+def recommended_components_for_family(family: ModelFamilyType) -> Sequence[str]:
+    canonical = resolve_model_family(family)
+    table = {
+        "stable-diffusion": ("unet", "vae", "text_encoder"),
+        "stable-diffusion-xl": ("unet", "vae", "text_encoder", "text_encoder_2"),
+        "stable-diffusion-3": ("transformer", "vae", "text_encoder", "text_encoder_2"),
+        "flux": ("transformer", "vae", "text_encoder", "t5"),
+        "flux2": ("transformer", "vae", "text_encoder", "t5"),
+        "z-image": ("transformer", "vae", "text_encoder", "text_encoder_2"),
+        "z-image-turbo": ("transformer", "vae", "text_encoder", "text_encoder_2"),
+        "qwen-image": ("transformer", "vae", "text_encoder", "text_encoder_2"),
+        "qwen-image-edit": ("transformer", "vae", "text_encoder", "text_encoder_2"),
+    }
+    return table[canonical]
 
 
 @dataclass
@@ -138,10 +204,91 @@ def _load_from_pretrained_with_fallbacks(
     )
 
 
+def _get_transformer_candidate_class_names(family: str) -> Sequence[str]:
+    by_family = {
+        "stable-diffusion-3": (
+            "SD3Transformer2DModel",
+            "SD3TransformerModel",
+            "Transformer2DModel",
+        ),
+        "flux": (
+            "FluxTransformer2DModel",
+            "Transformer2DModel",
+        ),
+        "flux2": (
+            "Flux2Transformer2DModel",
+            "FluxTransformer2DModel",
+            "Transformer2DModel",
+        ),
+        "z-image": (
+            "ZImageTransformer2DModel",
+            "FluxTransformer2DModel",
+            "SD3Transformer2DModel",
+            "Transformer2DModel",
+        ),
+        "z-image-turbo": (
+            "ZImageTransformer2DModel",
+            "FluxTransformer2DModel",
+            "SD3Transformer2DModel",
+            "Transformer2DModel",
+        ),
+        "qwen-image": (
+            "QwenImageTransformer2DModel",
+            "FluxTransformer2DModel",
+            "SD3Transformer2DModel",
+            "Transformer2DModel",
+        ),
+        "qwen-image-edit": (
+            "QwenImageTransformer2DModel",
+            "FluxTransformer2DModel",
+            "SD3Transformer2DModel",
+            "Transformer2DModel",
+        ),
+    }
+    return by_family.get(
+        family, ("FluxTransformer2DModel", "SD3Transformer2DModel", "Transformer2DModel")
+    )
+
+
+def _get_text_encoder_candidates(family: str, component: str):
+    from transformers import CLIPTextModel, CLIPTextModelWithProjection, T5EncoderModel
+
+    if component == "t5":
+        return ((T5EncoderModel, ("text_encoder_2", "text_encoder", None)),)
+
+    if component == "text_encoder_2":
+        if family in {"stable-diffusion", "stable-diffusion-xl"}:
+            return (
+                (CLIPTextModelWithProjection, ("text_encoder_2", None)),
+                (CLIPTextModel, ("text_encoder_2", None)),
+            )
+        # SD3 / FLUX-like families typically use T5 as encoder_2.
+        return (
+            (T5EncoderModel, ("text_encoder_2", None)),
+            (CLIPTextModelWithProjection, ("text_encoder_2", None)),
+            (CLIPTextModel, ("text_encoder_2", None)),
+        )
+
+    # component == text_encoder
+    if family in {"stable-diffusion", "stable-diffusion-xl"}:
+        return (
+            (CLIPTextModel, ("text_encoder", None)),
+            (CLIPTextModelWithProjection, ("text_encoder", None)),
+        )
+
+    # Transformer-centric families can still expose CLIP-like text_encoder.
+    return (
+        (CLIPTextModelWithProjection, ("text_encoder", None)),
+        (CLIPTextModel, ("text_encoder", None)),
+        (T5EncoderModel, ("text_encoder", None)),
+    )
+
+
 def load_torch_component(
     model_id_or_path: str,
     component: ComponentType,
     *,
+    family: Optional[ModelFamilyType] = None,
     revision: Optional[str] = None,
     dtype: Literal["float16", "float32"] = "float16",
     local_files_only: bool = False,
@@ -152,12 +299,16 @@ def load_torch_component(
         model_id_or_path: HF repo id (e.g. runwayml/stable-diffusion-v1-5)
             or local model directory.
         component: One of unet/transformer/vae/text_encoder/text_encoder_2/clip/t5.
+        family: Model family hint. Supported:
+            stable_diffusion, stable_diffusion_xl, stable_diffusion_3,
+            flux, flux2, z_image, z_image_turbo, qwen_image, qwen_image_edit.
         revision: Optional HF revision.
         dtype: float16 or float32.
         local_files_only: Force local cache/files only.
     """
 
     normalized = _normalize_component(component)
+    canonical_family = resolve_model_family(family)
     torch_dtype = _FLOAT_DTYPES[dtype]
 
     if normalized == "unet":
@@ -175,11 +326,7 @@ def load_torch_component(
     if normalized == "transformer":
         import diffusers
 
-        class_names = (
-            "FluxTransformer2DModel",
-            "SD3Transformer2DModel",
-            "Transformer2DModel",
-        )
+        class_names = _get_transformer_candidate_class_names(canonical_family)
 
         last_error = None
         for class_name in class_names:
@@ -216,21 +363,7 @@ def load_torch_component(
         )
 
     if normalized in {"text_encoder", "text_encoder_2", "t5"}:
-        from transformers import CLIPTextModel, CLIPTextModelWithProjection, T5EncoderModel
-
-        if normalized == "t5":
-            candidates = ((T5EncoderModel, ("text_encoder_2", "text_encoder", None)),)
-        elif normalized == "text_encoder_2":
-            candidates = (
-                (CLIPTextModelWithProjection, ("text_encoder_2", None)),
-                (CLIPTextModel, ("text_encoder_2", None)),
-                (T5EncoderModel, ("text_encoder_2", None)),
-            )
-        else:
-            candidates = (
-                (CLIPTextModel, ("text_encoder", None)),
-                (CLIPTextModelWithProjection, ("text_encoder", None)),
-            )
+        candidates = _get_text_encoder_candidates(canonical_family, normalized)
 
         last_error = None
         for cls, subfolders in candidates:
@@ -258,6 +391,7 @@ def load_torch_components(
     model_id_or_path: str,
     components: Iterable[ComponentType],
     *,
+    family: Optional[ModelFamilyType] = None,
     revision: Optional[str] = None,
     dtype: Literal["float16", "float32"] = "float16",
     local_files_only: bool = False,
@@ -270,6 +404,7 @@ def load_torch_components(
         loaded[key] = load_torch_component(
             model_id_or_path,
             key,  # type: ignore[arg-type]
+            family=family,
             revision=revision,
             dtype=dtype,
             local_files_only=local_files_only,
@@ -510,19 +645,36 @@ def _map_generic_weight(key: str, value: torch.Tensor):
     return [(key, value)]
 
 
-def _infer_mapping(component: str, state_dict: Dict[str, torch.Tensor]) -> MappingType:
+def _infer_mapping(
+    component: str,
+    state_dict: Dict[str, torch.Tensor],
+    *,
+    family: Optional[ModelFamilyType] = None,
+) -> MappingType:
+    canonical_family = resolve_model_family(family)
     keys = list(state_dict.keys())
 
     if component == "unet":
         return "sd_unet"
 
     if component == "transformer":
+        if canonical_family in {
+            "flux",
+            "flux2",
+            "z-image",
+            "z-image-turbo",
+            "qwen-image",
+            "qwen-image-edit",
+        }:
+            return "flux_transformer"
         flux_like = any(
             k.startswith("model.diffusion_model.") or ".img_mlp." in k for k in keys
         )
         return "flux_transformer" if flux_like else "generic"
 
     if component == "vae":
+        if canonical_family in {"flux", "flux2"}:
+            return "flux_vae"
         flux_like = any(
             k.startswith("encoder.") and (".down." in k or ".mid." in k)
             for k in keys
@@ -530,6 +682,21 @@ def _infer_mapping(component: str, state_dict: Dict[str, torch.Tensor]) -> Mappi
         return "flux_vae" if flux_like else "sd_vae"
 
     if component in {"text_encoder", "text_encoder_2", "clip"}:
+        if canonical_family in {
+            "stable-diffusion",
+            "stable-diffusion-xl",
+        }:
+            return "sd_clip"
+        if canonical_family in {"flux", "flux2"} and component == "text_encoder":
+            return "flux_clip"
+        if canonical_family in {
+            "stable-diffusion-3",
+            "z-image",
+            "z-image-turbo",
+            "qwen-image",
+            "qwen-image-edit",
+        } and component == "text_encoder_2":
+            return "flux_t5"
         t5_like = any(k.startswith("shared.") or ".block." in k for k in keys)
         if t5_like:
             return "flux_t5"
@@ -571,6 +738,7 @@ def convert_torch_state_dict_to_mlx(
     state_dict: Dict[str, torch.Tensor],
     *,
     component: ComponentType,
+    family: Optional[ModelFamilyType] = None,
     mapping: MappingType = "auto",
     dtype: Literal["float16", "float32"] = "float16",
 ) -> Dict[str, np.ndarray]:
@@ -578,7 +746,7 @@ def convert_torch_state_dict_to_mlx(
 
     normalized_component = _normalize_component(component)
     effective_mapping = (
-        _infer_mapping(normalized_component, state_dict)
+        _infer_mapping(normalized_component, state_dict, family=family)
         if mapping == "auto"
         else mapping
     )
@@ -616,6 +784,7 @@ def convert_component_from_pretrained(
     component: ComponentType,
     *,
     output_path: str | Path,
+    family: Optional[ModelFamilyType] = None,
     mapping: MappingType = "auto",
     revision: Optional[str] = None,
     dtype: Literal["float16", "float32"] = "float16",
@@ -628,6 +797,7 @@ def convert_component_from_pretrained(
     model = load_torch_component(
         model_id_or_path,
         component,
+        family=family,
         revision=revision,
         dtype=dtype,
         local_files_only=local_files_only,
@@ -641,12 +811,14 @@ def convert_component_from_pretrained(
     converted = convert_torch_state_dict_to_mlx(
         state_dict,
         component=component,
+        family=family,
         mapping=mapping,
         dtype=dtype,
     )
     meta = {
         "source_model": model_id_or_path,
         "component": _normalize_component(component),
+        "family": resolve_model_family(family),
         "mapping": mapping,
         "dtype": dtype,
     }
@@ -662,6 +834,7 @@ def convert_components_from_pretrained(
     components: Iterable[ComponentType],
     *,
     output_dir: str | Path,
+    family: Optional[ModelFamilyType] = None,
     mapping: MappingType = "auto",
     revision: Optional[str] = None,
     dtype: Literal["float16", "float32"] = "float16",
@@ -682,6 +855,7 @@ def convert_components_from_pretrained(
             model_id_or_path=model_id_or_path,
             component=normalized,  # type: ignore[arg-type]
             output_path=out_path,
+            family=family,
             mapping=mapping,
             revision=revision,
             dtype=dtype,
@@ -718,6 +892,7 @@ def convert_checkpoint_to_mlx(
     *,
     component: ComponentType,
     output_path: str | Path,
+    family: Optional[ModelFamilyType] = None,
     mapping: MappingType = "auto",
     dtype: Literal["float16", "float32"] = "float16",
 ) -> Path:
@@ -727,12 +902,14 @@ def convert_checkpoint_to_mlx(
     converted = convert_torch_state_dict_to_mlx(
         state_dict,
         component=component,
+        family=family,
         mapping=mapping,
         dtype=dtype,
     )
     meta = {
         "source_checkpoint": str(checkpoint_path),
         "component": _normalize_component(component),
+        "family": resolve_model_family(family),
         "mapping": mapping,
         "dtype": dtype,
     }
@@ -752,13 +929,14 @@ def load_mlx_components(
     hf_download: bool = True,
     lora_path: Optional[str] = None,
 ) -> LoadedMLXComponents:
-    """Load MLX-native components for Stable Diffusion or FLUX.
+    """Load MLX-native components for supported model families.
 
     Notes:
-    - `family="stable-diffusion"` expects `model` to be one of supported keys in
-      mlx_image.stable_diffusion.model_io.
-    - `family="flux"` expects `model` to be a flux key such as `flux-dev` or
-      `flux-schnell`.
+    - `stable_diffusion` and `stable_diffusion_xl` route to `stable_diffusion.model_io`.
+    - `flux`, `flux2`, `z_image`, `z_image_turbo`, `qwen_image`, `qwen_image_edit`
+      route to `flux.utils` loaders.
+    - `stable_diffusion_3` currently has no dedicated MLX-native loader in this repo;
+      use torch loading + conversion APIs in this module.
     - LoRA merging is recommended on the torch side using
       `convert_component_from_pretrained(..., lora_path=...)`.
     """
@@ -771,8 +949,9 @@ def load_mlx_components(
         )
 
     bundle = LoadedMLXComponents()
+    canonical_family = resolve_model_family(family)
 
-    if family == "stable-diffusion":
+    if canonical_family in {"stable-diffusion", "stable-diffusion-xl"}:
         if diffusion_model != "unet":
             raise ValueError("Stable Diffusion MLX loader currently supports diffusion_model='unet' only.")
 
@@ -788,7 +967,7 @@ def load_mlx_components(
             bundle.vae = load_autoencoder(model, float16=False)
         if load_text_encoder:
             bundle.text_encoder = load_sd_text_encoder(model, float16=float16)
-        if load_text_encoder_2:
+        if load_text_encoder_2 or canonical_family == "stable-diffusion-xl":
             bundle.text_encoder_2 = load_sd_text_encoder(
                 model,
                 float16=float16,
@@ -796,7 +975,7 @@ def load_mlx_components(
             )
         if load_tokenizer:
             bundle.tokenizer = load_sd_tokenizer(model)
-            if load_text_encoder_2:
+            if load_text_encoder_2 or canonical_family == "stable-diffusion-xl":
                 bundle.tokenizer_2 = load_sd_tokenizer(
                     model,
                     vocab_key="tokenizer_2_vocab",
@@ -804,9 +983,18 @@ def load_mlx_components(
                 )
         return bundle
 
-    if family == "flux":
+    if canonical_family in {
+        "flux",
+        "flux2",
+        "z-image",
+        "z-image-turbo",
+        "qwen-image",
+        "qwen-image-edit",
+    }:
         if diffusion_model != "transformer":
-            raise ValueError("FLUX MLX loader expects diffusion_model='transformer'.")
+            raise ValueError(
+                "FLUX-like MLX loader expects diffusion_model='transformer'."
+            )
 
         from .flux.utils import (
             load_ae,
@@ -822,18 +1010,40 @@ def load_mlx_components(
             bundle.vae = load_ae(model, hf_download=hf_download)
         if load_text_encoder:
             bundle.text_encoder = load_clip(model)
-        if load_text_encoder_2:
+        if load_text_encoder_2 or canonical_family in {
+            "flux",
+            "flux2",
+            "z-image",
+            "z-image-turbo",
+            "qwen-image",
+            "qwen-image-edit",
+        }:
             bundle.text_encoder_2 = load_t5(model)
         if load_tokenizer:
             bundle.tokenizer = load_clip_tokenizer(model)
-            if load_text_encoder_2:
+            if load_text_encoder_2 or canonical_family in {
+                "flux",
+                "flux2",
+                "z-image",
+                "z-image-turbo",
+                "qwen-image",
+                "qwen-image-edit",
+            }:
                 bundle.tokenizer_2 = load_t5_tokenizer(model)
         return bundle
 
-    raise ValueError(f"Unsupported MLX family: {family!r}")
+    if canonical_family == "stable-diffusion-3":
+        raise NotImplementedError(
+            "stable_diffusion_3 MLX-native loader is not implemented in this repository yet. "
+            "Use `load_torch_component(..., family='stable_diffusion_3')` + "
+            "`convert_component_from_pretrained(...)` paths."
+        )
+
+    raise ValueError(f"Unsupported MLX family: {family!r} -> {canonical_family!r}")
 
 
 __all__ = [
+    "ModelFamilyType",
     "LoadedMLXComponents",
     "LoadedTorchComponents",
     "apply_lora_to_torch_component",
@@ -845,5 +1055,7 @@ __all__ = [
     "load_torch_checkpoint_state_dict",
     "load_torch_component",
     "load_torch_components",
+    "recommended_components_for_family",
+    "resolve_model_family",
     "save_mlx_safetensors",
 ]

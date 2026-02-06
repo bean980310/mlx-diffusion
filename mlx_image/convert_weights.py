@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .component_loader import convert_components_from_pretrained
+from .component_loader import (
+    convert_components_from_pretrained,
+    recommended_components_for_family,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,9 +22,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="HF repo id or local path containing model subfolders.",
     )
     parser.add_argument(
+        "--family",
+        default="stable_diffusion",
+        choices=[
+            "stable_diffusion",
+            "stable_diffusion_xl",
+            "stable_diffusion_3",
+            "flux",
+            "flux2",
+            "z_image",
+            "z_image_turbo",
+            "qwen_image",
+            "qwen_image_edit",
+        ],
+        help="Model family hint (controls class candidates and auto mapping).",
+    )
+    parser.add_argument(
         "--components",
         nargs="+",
-        default=["unet", "vae", "text_encoder"],
+        default=None,
         help="Components to convert. Choices: unet transformer vae text_encoder text_encoder_2 clip t5",
     )
     parser.add_argument(
@@ -79,10 +98,13 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
+    components = args.components or list(recommended_components_for_family(args.family))
+
     outputs = convert_components_from_pretrained(
         model_id_or_path=args.model,
-        components=args.components,
+        components=components,
         output_dir=Path(args.outdir),
+        family=args.family,
         mapping=args.mapping,
         revision=args.revision,
         dtype=args.dtype,
