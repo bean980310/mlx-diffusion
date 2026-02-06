@@ -1,0 +1,25 @@
+[build-system]
+requires=[
+    "setuptools>=80",
+    "setuptools-scm>=8",
+    "wheel",
+    "build",
+    "uv-build"
+]
+
+[project]
+name = "mlx-image-diffusion"
+dynamic=["dependencies"]
+version = "0.0.1"
+authors=[
+    {name="Hyunbeen Chang", email="bean980310@gmail.com"}
+]
+maintainers=[
+    {name="Hyunbeen Chang", email="bean980310@gmail.com"}
+]
+description = "Image Diffusion Engine for Apple Silicon Mac"
+readme = "README.md"
+requires-python = ">=3.10, <3.14"
+
+[tool.setuptools.dynamic]
+dependencies = {file=["requirements.txt"]}
