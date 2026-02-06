@@ -1,4 +1,4 @@
-# MLX Diffusion
+# MLX Image Diffusion
 
 **WIP** 
 Under Construction
